@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Feelings → Thoughts</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { overflow: hidden; background: #fff; font-family: Georgia, 'Times New Roman', serif; }
+  #canvas-container {
+    width: 100vw; height: 100vh; overflow: hidden;
+    cursor: grab; touch-action: none; user-select: none; position: relative;
+  }
+  #canvas-container.dragging { cursor: grabbing; }
+
+  .tile { position: absolute; }
+  .aura {
+    position: absolute; width: 280px; height: 280px;
+    transform: translate(-50%,-50%); border-radius: 50%;
+    pointer-events: none; transition: opacity 0.8s;
+  }
+  .piece {
+    position: absolute; cursor: pointer;
+    transition: transform 0.6s ease, box-shadow 0.6s ease;
+  }
+  .piece:hover { z-index: 50 !important; }
+  .piece img {
+    width: 100%; display: block; border-radius: 2px; pointer-events: none;
+  }
+  .piece .placeholder {
+    background: #f4f4f4; border-radius: 3px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 20px; font-style: italic; color: #888; font-size: 13px; text-align: center;
+  }
+  .placeholder small { font-size: 8px; color: #bbb; letter-spacing: 0.1em; text-transform: uppercase; margin-top: 6px; font-style: normal; }
+
+  /* Filter bar */
+  .filter-bar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 200;
+    display: flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 20px;
+    background: rgba(255,255,255,0.85); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(0,0,0,0.03);
+  }
+  .filter-btn {
+    width: 22px; height: 22px; border-radius: 50%; cursor: pointer;
+    transition: all 0.3s; border: 2px solid transparent; padding: 0;
+  }
+  .filter-btn.all-btn { background: transparent; border-color: #ddd; display: flex; align-items: center; justify-content: center; }
+  .filter-btn.all-btn.active { background: #1a1a2e; border-color: #333; }
+  .filter-btn.all-btn.active span { color: #fff; }
+  .filter-btn.all-btn span { font-size: 7px; font-weight: 700; color: transparent; }
+  .filter-btn.cluster-btn { opacity: 0.35; }
+  .filter-btn.cluster-btn.active { opacity: 1; transform: scale(1.25); }
+
+  /* Modal */
+  .modal-overlay {
+    position: fixed; inset: 0; z-index: 1000;
+    background: rgba(255,255,255,0.5); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    display: flex; align-items: center; justify-content: center;
+    animation: fadeIn 0.25s ease;
+  }
+  .modal {
+    background: rgba(255,255,255,0.93); border-radius: 6px; max-width: 480px; width: 90%;
+    max-height: 85vh; overflow-y: auto; padding: 32px 36px; position: relative;
+    box-shadow: 0 14px 44px rgba(0,0,0,0.06);
+  }
+  .modal-close { position: absolute; top: 12px; right: 16px; background: none; border: none; font-size: 20px; cursor: pointer; color: #bbb; }
+  .modal-dot { width: 16px; height: 16px; border-radius: 50%; opacity: 0.4; margin-bottom: 12px; }
+  .modal-label { font-size: 8px; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 4px; font-weight: 600; }
+  .modal h2 { font-size: 21px; font-weight: 400; margin: 0 0 14px; color: #1a1a2e; }
+  .modal-section { margin-bottom: 14px; }
+  .modal-section-label { font-size: 8px; text-transform: uppercase; letter-spacing: 0.12em; color: #aaa; margin-bottom: 2px; }
+  .modal-section-value { font-size: 13px; color: #444; line-height: 1.6; }
+  .tag { padding: 2px 8px; border-radius: 20px; font-size: 10px; display: inline-block; margin: 0 5px 5px 0; }
+  .modal-footer { margin-top: 18px; font-size: 8px; color: #ccc; font-style: italic; }
+
+  .hint {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+    z-index: 200; font-family: Georgia, serif; font-size: 10px; color: #d4d4d4;
+    letter-spacing: 0.2em; text-transform: uppercase; pointer-events: none;
+  }
+
+  @keyframes fadeIn { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
+</style>
+</head>
+<body>
+
+<div id="canvas-container"></div>
+<div class="filter-bar" id="filter-bar"></div>
+<div class="hint">drag to explore · scroll to zoom</div>
+<div id="modal-root"></div>
+
+<script>
+const CLUSTERS = [
+  { id: "joy", label: "Joy / Radość", color: "#F7E84E", accent: "#9E8B0A" },
+  { id: "trust", label: "Trust / Zaufanie", color: "#8BC34A", accent: "#4A7A1A" },
+  { id: "fear", label: "Fear / Lęk", color: "#2E7D32", accent: "#1B5E20" },
+  { id: "surprise", label: "Surprise / Zdziwienie", color: "#29B6F6", accent: "#0277BD" },
+  { id: "sadness", label: "Sadness / Smutek", color: "#5C6BC0", accent: "#283593" },
+  { id: "disgust", label: "Disgust / Wstręt", color: "#AB47BC", accent: "#6A1B9A" },
+  { id: "anger", label: "Anger / Gniew", color: "#EF5350", accent: "#B71C1C" },
+  { id: "anticipation", label: "Anticipation / Oczekiwanie", color: "#FF9800", accent: "#E65100" },
+];
+const cMap = {}; CLUSTERS.forEach(c => { cMap[c.id] = c; });
+
+const TILE = 2800;
+
+const PIECES = [
+  { id: 1, cluster: "sadness", title: "Dear... Whoever You Were",
+    img: "7d2e8ff6-1.png",
+    aspect: 0.72, w: 300, baseOp: 0.75, rot: 2,
+    source: "Dear... Whoever You Were — letter to grandmother",
+    tags: ["English", "family", "regret", "addiction", "grandmother"], lang: "EN" },
+  { id: 2, cluster: "sadness", title: "To Feel Nothing",
+    img: "7839851e-1.png",
+    aspect: 1.3, w: 360, baseOp: 0.65, rot: -3,
+    source: "Handwritten — on numbness and feeling (orange ink)",
+    tags: ["English", "handwriting", "numbness", "pain", "sorrow"], lang: "EN" },
+  { id: 3, cluster: "fear", title: "Odpuścić?",
+    img: "309311eb-1.png",
+    aspect: 0.72, w: 280, baseOp: 0.7, rot: 4,
+    source: "Original drawing — hands breaking free",
+    tags: ["Polish", "drawing", "freedom", "letting go", "hands"], lang: "PL" },
+  { id: 4, cluster: "sadness", title: "Wicio — Redakcja I",
+    img: "IMG_6297.png",
+    aspect: 0.78, w: 260, baseOp: 0.72, rot: -1,
+    source: "Polish novel — redacted page (p.91), teal ink redaction",
+    tags: ["Polish", "literature", "redaction", "memory", "censorship"], lang: "PL" },
+  { id: 5, cluster: "disgust", title: "Dear... Drugs",
+    img: "Pd5clearback.png",
+    aspect: 0.68, w: 300, baseOp: 0.78, rot: -2,
+    source: "Dear... Drugs — letter from an 8-year-old sister",
+    tags: ["English", "addiction", "family", "letter", "loss"], lang: "EN" },
+  { id: 6, cluster: "anger", title: "Wicio — Redakcja II",
+    img: "IMG_6502.png",
+    aspect: 0.72, w: 270, baseOp: 0.68, rot: 3,
+    source: "Polish novel — redacted page, black ink censorship",
+    tags: ["Polish", "literature", "redaction", "shame", "alcohol"], lang: "PL" },
+];
+
+// --- SCATTER LAYOUT ---
+function seeded(seed) {
+  let s = seed;
+  return () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; };
+}
+
+function scatter() {
+  const r = seeded(211);
+  const out = [];
+  const margin = 250, area = TILE - margin * 2;
+  PIECES.forEach(p => {
+    let x, y, tries = 0, ok = false;
+    while (!ok && tries < 120) {
+      x = margin + r() * area; y = margin + r() * area;
+      ok = true;
+      for (const prev of out) { if (Math.hypot(x - prev.x, y - prev.y) < 320) { ok = false; break; } }
+      tries++;
+    }
+    out.push({ id: p.id, x, y });
+  });
+  return out;
+}
+
+const POS = scatter();
+const posMap = {}; POS.forEach(p => { posMap[p.id] = p; });
+
+function auraCenters() {
+  const g = {};
+  PIECES.forEach(p => { if (!g[p.cluster]) g[p.cluster] = []; g[p.cluster].push(posMap[p.id]); });
+  const out = {};
+  Object.keys(g).forEach(k => {
+    const pts = g[k];
+    out[k] = { x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y: pts.reduce((s, p) => s + p.y, 0) / pts.length };
+  });
+  return out;
+}
+const AURAS = auraCenters();
+
+function mod(n, m) { return ((n % m) + m) % m; }
+
+// --- STATE ---
+let cam = { x: -(TILE / 2 - window.innerWidth / 2), y: -(TILE / 2 - window.innerHeight / 2) };
+let zoom = 0.85;
+let dragging = false;
+let dragStart = null;
+let activeFilter = null;
+let selectedPiece = null;
+let startTime = performance.now();
+
+const container = document.getElementById('canvas-container');
+const filterBar = document.getElementById('filter-bar');
+const modalRoot = document.getElementById('modal-root');
+
+// --- FILTER BAR ---
+function renderFilterBar() {
+  filterBar.innerHTML = '';
+  // All button
+  const allBtn = document.createElement('button');
+  allBtn.className = 'filter-btn all-btn' + (!activeFilter ? ' active' : '');
+  allBtn.innerHTML = '<span>ALL</span>';
+  allBtn.onclick = () => { activeFilter = null; render(); renderFilterBar(); };
+  filterBar.appendChild(allBtn);
+
+  CLUSTERS.forEach(c => {
+    const btn = document.createElement('button');
+    btn.className = 'filter-btn cluster-btn' + (activeFilter === c.id ? ' active' : '');
+    btn.style.background = c.color;
+    btn.style.borderColor = activeFilter === c.id ? c.color : 'transparent';
+    btn.style.boxShadow = activeFilter === c.id ? `0 0 8px ${c.color}70` : 'none';
+    btn.title = c.label;
+    btn.onclick = () => {
+      activeFilter = c.id;
+      if (AURAS[c.id]) {
+        cam.x = -(AURAS[c.id].x * zoom - window.innerWidth / 2);
+        cam.y = -(AURAS[c.id].y * zoom - window.innerHeight / 2);
+      }
+      render(); renderFilterBar();
+    };
+    filterBar.appendChild(btn);
+  });
+}
+
+// --- MODAL ---
+function showModal(piece) {
+  selectedPiece = piece;
+  const c = cMap[piece.cluster];
+  modalRoot.innerHTML = `
+    <div class="modal-overlay" onclick="closeModal()">
+      <div class="modal" style="border: 1.5px solid ${c.color}25;" onclick="event.stopPropagation()">
+        <button class="modal-close" onclick="closeModal()">×</button>
+        <div class="modal-dot" style="background:${c.color}"></div>
+        <div class="modal-label" style="color:${c.accent}">${c.label}</div>
+        <h2>${piece.title}</h2>
+        <div class="modal-section">
+          <div class="modal-section-label">Source</div>
+          <div class="modal-section-value">${piece.source}</div>
+        </div>
+        <div class="modal-section">
+          <div class="modal-section-label">Language</div>
+          <div class="modal-section-value">${piece.lang}</div>
+        </div>
+        <div class="modal-section">
+          <div class="modal-section-label">Tags</div>
+          <div>${piece.tags.map(t => `<span class="tag" style="background:${c.color}10;border:1px solid ${c.color}18;color:${c.accent}">#${t}</span>`).join('')}</div>
+        </div>
+        <div class="modal-footer">Technika: grafika komputerowa, druk na pleksi</div>
+      </div>
+    </div>`;
+}
+window.closeModal = function() { selectedPiece = null; modalRoot.innerHTML = ''; };
+
+// --- RENDER ---
+function render() {
+  container.innerHTML = '';
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const tw = TILE * zoom, th = TILE * zoom;
+  const bx = mod(cam.x, tw) - tw;
+  const by = mod(cam.y, th) - th;
+  const cols = Math.ceil(vw / tw) + 2;
+  const rows = Math.ceil(vh / th) + 2;
+  const time = (performance.now() - startTime) / 1000;
+  const visPieces = activeFilter ? PIECES.filter(p => p.cluster === activeFilter) : PIECES;
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const ox = bx + c * tw, oy = by + r * th;
+      const tile = document.createElement('div');
+      tile.className = 'tile';
+      tile.style.cssText = `left:${ox}px;top:${oy}px;width:${TILE}px;height:${TILE}px;transform:scale(${zoom});transform-origin:0 0;`;
+
+      // Auras
+      CLUSTERS.forEach(cl => {
+        const a = AURAS[cl.id];
+        if (!a || (activeFilter && activeFilter !== cl.id)) return;
+        const aura = document.createElement('div');
+        aura.className = 'aura';
+        aura.style.cssText = `left:${a.x}px;top:${a.y}px;background:radial-gradient(circle,${cl.color}18 0%,${cl.color}05 45%,transparent 70%);`;
+        tile.appendChild(aura);
+      });
+
+      // Pieces
+      visPieces.forEach((p, i) => {
+        const pos = posMap[p.id];
+        const cluster = cMap[p.cluster];
+        const breathe = Math.sin(time * 0.08 + i * 2.1) * 0.05;
+        const op = p.baseOp + breathe;
+
+        const el = document.createElement('div');
+        el.className = 'piece';
+        el.style.cssText = `left:${pos.x}px;top:${pos.y}px;width:${p.w}px;transform:translate(-50%,-50%) rotate(${p.rot}deg);z-index:10;opacity:${op};`;
+
+        el.onmouseenter = () => {
+          el.style.opacity = Math.min(p.baseOp + 0.22, 0.98);
+          el.style.transform = `translate(-50%,-50%) rotate(${p.rot}deg) scale(1.03)`;
+          el.style.filter = `drop-shadow(0 6px 20px ${cluster.color}30)`;
+          el.style.zIndex = 50;
+        };
+        el.onmouseleave = () => {
+          el.style.opacity = op;
+          el.style.transform = `translate(-50%,-50%) rotate(${p.rot}deg)`;
+          el.style.filter = 'none';
+          el.style.zIndex = 10;
+        };
+        el.onclick = (e) => { e.stopPropagation(); showModal(p); };
+
+        if (p.img) {
+          const img = document.createElement('img');
+          img.src = p.img;
+          img.alt = p.title;
+          img.draggable = false;
+          img.onerror = () => {
+            el.innerHTML = `<div class="placeholder" style="height:${p.w / p.aspect}px;border:1px solid ${cluster.color}25">${p.title}<small>image not found</small></div>`;
+          };
+          el.appendChild(img);
+        } else {
+          el.innerHTML = `<div class="placeholder" style="height:${p.w / p.aspect}px;border:1px solid ${cluster.color}25">${p.title}<small>no image set</small></div>`;
+        }
+
+        tile.appendChild(el);
+      });
+
+      container.appendChild(tile);
+    }
+  }
+}
+
+// --- INTERACTION ---
+container.addEventListener('pointerdown', e => {
+  if (e.target.closest('.piece')) return;
+  dragging = true;
+  container.classList.add('dragging');
+  dragStart = { x: e.clientX - cam.x, y: e.clientY - cam.y };
+});
+
+window.addEventListener('pointermove', e => {
+  if (!dragging || !dragStart) return;
+  cam.x = e.clientX - dragStart.x;
+  cam.y = e.clientY - dragStart.y;
+  render();
+});
+
+window.addEventListener('pointerup', () => {
+  dragging = false;
+  container.classList.remove('dragging');
+  dragStart = null;
+});
+
+container.addEventListener('wheel', e => {
+  e.preventDefault();
+  const oldZoom = zoom;
+  zoom = Math.max(0.25, Math.min(2.5, zoom * (e.deltaY > 0 ? 0.95 : 1.05)));
+  // Zoom toward cursor
+  const rect = container.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  cam.x = mx - (mx - cam.x) * (zoom / oldZoom);
+  cam.y = my - (my - cam.y) * (zoom / oldZoom);
+  render();
+}, { passive: false });
+
+// Opacity breathing loop
+function breatheLoop() {
+  if (!dragging && !selectedPiece) render();
+  setTimeout(breatheLoop, 800);
+}
+
+// Init
+renderFilterBar();
+render();
+setTimeout(breatheLoop, 800);
+window.addEventListener('resize', render);
+</script>
+</body>
+</html>
